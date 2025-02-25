@@ -23,6 +23,7 @@ Requirements
 	•	opencv-python
 
 Usage
+
 	1.	Install Dependencies:
 
 pip install mss pynput rich opencv-python
@@ -36,11 +37,15 @@ python gg.py
 Enter dataset name:
 
 This creates/uses a folder, scans existing trials, and sets up the next trial number.
+
 	4.	macOS Raw Input Prompt (if on Darwin):
-  Use raw mouse data via Quartz? (y/n):
+ 
+ Use raw mouse data via Quartz? (y/n):
 	•	y: sets up the Quartz event tap for raw deltas.
 	•	n: uses only standard OS input from pynput.
+ 
 	5.	Commands (after dataset is ready):
+ 
 	•	S = Start a new trial (capture frames + inputs).
 	•	Q = Stop the current trial (save JSON log, end screen capture).
 	•	QQ = Exit the program entirely.
@@ -48,7 +53,9 @@ This creates/uses a folder, scans existing trials, and sets up the next trial nu
 	•	V = Visualize a trial. You’ll be asked which trial number (or blank for latest).
 	•	In the OpenCV “Visualization” window, arrow keys navigate frames.
 	•	In the console, type q to exit visualization mode.
+ 
 	6.	Check Output:
+ 
 	•	Images in Trial_<N> folder (frame_0.webp, frame_1.webp, etc.).
 	•	TrialData_<N>.json with all events and frame references.
 
