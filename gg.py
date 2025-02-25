@@ -10,6 +10,8 @@ from pynput import keyboard, mouse
 
 from rich.console import Console
 from rich.table import Table
+from datetime import timedelta, datetime
+from tqdm import tqdm
 
 # -----------------------------------------------------------
 # OS DETECTION
@@ -20,12 +22,18 @@ print("OS Detected:", OS_NAME)
 USE_MAC_RAW_INPUT = False
 if OS_NAME == "Darwin":
     print("[INFO] macOS detected.")
-    print("[???]: Use raw mouse capture? [Y/N]")
+    # You can optionally prompt the user if they want raw mouse input:
+    # raw_choice = input("Use raw mouse data via Quartz? (y/n): ").strip().lower()
+    # if raw_choice == "y":
+    #     USE_MAC_RAW_INPUT = True
+    #     print("[INFO] Raw data capture from Quartz will be used.")
+    # else:
+    #     print("[INFO] Using normal Pynput-based approach only.")
 else:
     print("[INFO] Raw mouse capture only works on macOS (Quartz). Using normal approach on", OS_NAME)
 
 # We'll store whether the user wants raw data here
-enable_mac_raw_data = False
+enable_mac_raw_data = USE_MAC_RAW_INPUT
 
 # -----------------------------------------------------------
 # MAC-SPECIFIC RAW INPUT (Quartz)
@@ -93,13 +101,14 @@ def start_mac_raw_input_tap():
 # -----------------------------------------------------------
 # GLOBAL CONFIGURATIONS
 # -----------------------------------------------------------
-FRAME_WIDTH, FRAME_HEIGHT = 480, 480
+# NOTE: You can adjust these if you want a different capture size, format, etc.
+FRAME_WIDTH, FRAME_HEIGHT = 224, 224
 FPS = 30
 MOUSE_MOVE_TIMEOUT = 0.2
 
 SAVE_FORMAT = ".webp"
 SAVE_QUALITY_PARAM = cv2.IMWRITE_WEBP_QUALITY
-SAVE_QUALITY_VALUE = 70
+SAVE_QUALITY_VALUE = 80
 
 # Key codes for arrow navigation in the OpenCV window
 LEFT_KEYS = [2424832, 65361, 63234]   # Left
@@ -305,7 +314,9 @@ def capture_screen():
             if should_capture:
                 screenshot = sct.grab(monitor)
                 img = np.array(screenshot)
+                # Convert BGRA to BGR
                 img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                # Resize to desired dimension
                 img = cv2.resize(img, (FRAME_WIDTH, FRAME_HEIGHT), interpolation=cv2.INTER_AREA)
 
                 frame_time = time.time()
@@ -325,7 +336,7 @@ def capture_screen():
                         else:
                             i += 1
 
-                    frame_filename = f"frame_{trial_frame_counter}{SAVE_FORMAT}"
+                    frame_filename = f"frame_{trial_frame_counter}.webp"
                     full_frame_path = os.path.join(trial_folder_path, frame_filename)
                     cv2.imwrite(full_frame_path, img, [SAVE_QUALITY_PARAM, SAVE_QUALITY_VALUE])
 
@@ -447,7 +458,9 @@ def visualize_dataset():
             extended = np.zeros((img.shape[0] + label_height, img.shape[1], 3), dtype=np.uint8)
             extended[:img.shape[0], :img.shape[1]] = img
 
-            info_text = f"{fdata['filename']} | {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(fdata['timestamp']))}"
+            # Convert timestamp to human-readable
+            f_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(fdata["timestamp"]))
+            info_text = f"{fdata['filename']} | {f_time}"
             cv2.putText(
                 extended, info_text,
                 (10, img.shape[0] + 20),
@@ -456,9 +469,8 @@ def visualize_dataset():
             cv2.imshow("Visualization", extended)
 
             console.clear()
-            frame_ts_human = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(fdata["timestamp"]))
             console.print(
-                f"[bold green]{frame_ts_human} | Frame {idx+1}/{total_frames} | {fdata['filename']}[/bold green]"
+                f"[bold green]{f_time} | Frame {idx+1}/{total_frames} | {fdata['filename']}[/bold green]"
             )
 
             # Build events table
@@ -511,8 +523,141 @@ def visualize_dataset():
     print("[INFO] Visualization mode ended.")
 
 # -----------------------------------------------------------
+# CREATE/CONVERT/SAVE DATASET CODE
+# -----------------------------------------------------------
+
+def convert_images_to_numpy(image_folder, output_npz):
+    """
+    Converts all WebP images in a folder to NumPy arrays and saves them in a .npz file.
+    
+    - Keeps the original image size (NO SCALING)
+    - Maintains RGB color information
+    - Stores images with filenames as dictionary keys (without extensions)
+    """
+    from tqdm import tqdm
+
+    images_dict = {}
+    image_files = [f for f in os.listdir(image_folder) if f.endswith(".webp")]
+    
+    if not image_files:
+        print("[ERROR] No .webp images found in the folder.")
+        return
+
+    print(f"[INFO] Processing {len(image_files)} images...")
+
+    for image_file in tqdm(image_files, desc="Converting Images"):
+        file_path = os.path.join(image_folder, image_file)
+        
+        img = cv2.imread(file_path, cv2.IMREAD_COLOR)
+        if img is None:
+            print(f"[WARN] Failed to read {image_file}, skipping...")
+            continue
+
+        # BGR to RGB
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Key: remove extension
+        key = os.path.splitext(image_file)[0]
+        images_dict[key] = img
+
+    np.savez_compressed(output_npz, **images_dict)
+    print(f"[INFO] Saved {len(images_dict)} images to {output_npz}")
+
+def parse_json_metadata(json_path):
+    """
+    Parses a JSON dataset file and extracts relevant metadata.
+
+    - Omits everything before 'trial_start' and after 'trial_end'
+    - Extracts:
+        - filename (without .webp extension) -> aligns with NPZ keys
+        - timestamp (shifted to start from 00:00:00.000 in HH:MM:SS.mmm)
+        - held_keys (lowercase, deduplicated)
+    """
+    from datetime import timedelta
+
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    parsed_data = {}
+    in_trial = False
+    base_timestamp = None
+
+    for entry in data:
+        # trial_start
+        if entry.get("type") == "trial_start":
+            in_trial = True
+            continue
+        # trial_end
+        if entry.get("type") == "trial_end":
+            in_trial = False
+            break
+
+        if in_trial and "filename" in entry:
+            frame_key = entry["filename"].replace(".webp", "")
+            timestamp = entry["timestamp"]
+            held_keys = entry.get("held_keys", [])
+
+            # normalize keys: lower + deduplicate
+            held_keys = list(dict.fromkeys(k.lower() for k in held_keys))
+
+            if base_timestamp is None:
+                base_timestamp = timestamp
+
+            # shift
+            shifted = timestamp - base_timestamp
+            # format
+            td = str(timedelta(seconds=shifted))[:12]  # e.g. '0:00:00.234'
+            
+            parsed_data[frame_key] = {
+                "timestamp": td,
+                "held_keys": held_keys
+            }
+
+    print(f"[INFO] Parsed {len(parsed_data)} frames from JSON.")
+    return parsed_data
+
+def create_combined_dataset(image_npz_path, metadata_json_path):
+    """
+    Loads images (from .npz) and metadata (parsed JSON), combines into a single dict:
+    { frame_x: { image: np.array, timestamp: .., held_keys: [...] } }
+    """
+    images = np.load(image_npz_path)
+    metadata = parse_json_metadata(metadata_json_path)
+
+    dataset = {}
+    for frame_name in images.keys():
+        dataset[frame_name] = {
+            "image": images[frame_name],
+            "timestamp": metadata.get(frame_name, {}).get("timestamp", None),
+            "held_keys": metadata.get(frame_name, {}).get("held_keys", [])
+        }
+
+    print(f"[INFO] Dataset created with {len(dataset)} frames.")
+    return dataset
+
+def save_combined_dataset(dataset, output_npz):
+    """
+    Saves the combined dataset (images + metadata) as a compressed .npz.
+    """
+    npz_data = {}
+    for frame_key, data in dataset.items():
+        npz_data[frame_key] = data["image"]
+
+    # JSON-ify the metadata
+    import json
+    metadata_json = json.dumps({
+        key: {
+            k: v for k, v in val.items() if k != "image"
+        } for key, val in dataset.items()
+    })
+
+    np.savez_compressed(output_npz, **npz_data, metadata=metadata_json)
+    print(f"[INFO] Combined dataset saved as {output_npz}")
+
+# -----------------------------------------------------------
 # CONSOLE COMMAND HANDLERS
 # -----------------------------------------------------------
+
 def initialize_dataset():
     global dataset_name, next_trial_number
     while True:
@@ -571,7 +716,7 @@ def start_trial():
     t = Thread(target=capture_screen, daemon=True)
     t.start()
 
-    # If on mac and user enabled raw data, also start the event tap + a poll thread
+    # If on mac and user enabled raw data
     if (OS_NAME == "Darwin") and (enable_mac_raw_data):
         start_mac_raw_input_tap()
         mac_raw_poll_thread = Thread(target=poll_mac_raw_deltas, daemon=True)
@@ -582,22 +727,48 @@ def start_trial():
 def stop_trial():
     global recording, trial_data_log, next_trial_number
     global stop_capture_event
+    global dataset_name, trial_folder_path
+
     if not recording:
-        print("[WARN] No trial is recording. Use 'S' to start a trial.")
+        print("[WARN] No trial is currently recording. Use 'S' to start a trial.")
         return
 
+    # Stop capture
     stop_capture_event.set()
     recording = False
 
+    # Insert trial_end
     trial_data_log.append({
         "type": "trial_end",
         "timestamp": time.time(),
         "trial_number": next_trial_number
     })
 
-    time.sleep(0.5)
+    time.sleep(0.5)  # Wait for capture thread to exit gracefully
+
+    # Save the raw metadata log
     save_trial_data_log(next_trial_number)
     print(f"[INFO] Trial #{next_trial_number} ended.")
+
+    # Now automatically do the post-processing after 0.2s
+    time.sleep(0.2)
+    print("[INFO] Post-processing images and metadata...")
+
+    # 1) Convert images to NPZ
+    trial_folder_path = os.path.join(dataset_name, f"Trial_{next_trial_number}")
+    images_npz_path = os.path.join(trial_folder_path, f"Trial_{next_trial_number}_images.npz")
+    convert_images_to_numpy(trial_folder_path, images_npz_path)
+
+    # 2) Create combined dataset
+    json_path = os.path.join(dataset_name, f"TrialData_{next_trial_number}.json")
+    combined_dataset = create_combined_dataset(images_npz_path, json_path)
+
+    # 3) Save combined dataset
+    combined_npz_path = os.path.join(dataset_name, f"Trial_{next_trial_number}_combined.npz")
+    save_combined_dataset(combined_dataset, combined_npz_path)
+    print("[INFO] Post-processing complete.")
+
+    # Prepare for next trial
     next_trial_number += 1
 
 def exit_program():
@@ -624,24 +795,22 @@ def reset_program():
 def main():
     global running, recording, enable_mac_raw_data
 
-    # 1) If on macOS, ask user if they want raw data
-    if OS_NAME == "Darwin":
-        raw_choice = input("Use raw mouse data via Quartz? (y/n): ").strip().lower()
-        if raw_choice == "y":
-            enable_mac_raw_data = True
-            print("[INFO] Raw data capture from Quartz will be used.")
-        else:
-            print("[INFO] Using normal Pynput-based approach only.")
-    else:
-        print("[INFO] Not macOS, skipping raw data question.")
+    # If needed, we can prompt user for raw data on macOS:
+    # if OS_NAME == "Darwin":
+    #     raw_choice = input("Use raw mouse data via Quartz? (y/n): ").strip().lower()
+    #     if raw_choice == "y":
+    #         enable_mac_raw_data = True
+    #         print("[INFO] Raw data capture from Quartz will be used.")
+    #     else:
+    #         print("[INFO] Using normal Pynput-based approach only.")
 
-    # 2) Start normal global keyboard/mouse listeners
+    # Start global keyboard/mouse listeners
     kb_listener = keyboard.Listener(on_press=on_key_press, on_release=on_key_release)
     ms_listener = mouse.Listener(on_move=on_mouse_move, on_click=on_mouse_click)
     kb_listener.start()
     ms_listener.start()
 
-    # 3) Initialize dataset
+    # Initialize dataset folder
     initialize_dataset()
 
     while running:
@@ -660,12 +829,14 @@ def main():
         else:
             print(f"[WARN] Unknown command: {cmd}")
 
+    # Cleanup
     kb_listener.stop()
     ms_listener.stop()
     kb_listener.join()
     ms_listener.join()
 
     print("[INFO] Program has exited.")
+
 
 if __name__ == "__main__":
     main()
