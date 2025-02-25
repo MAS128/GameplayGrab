@@ -1,26 +1,31 @@
 Screen + Input Capture for Machine Learning Datasets
 
 This Python script captures screen frames alongside user input (keyboard and mouse events) to create a dataset for machine learning or analytics. Each trial produces:
+
 	1.	Images (frames) stored in a folder (e.g., Trial_0).
 	2.	A JSON log (TrialData_0.json) with timestamps of frames and events (keys pressed, mouse position, etc.).
 
 Features
-	•	Frame Capture: Uses mss to grab the primary screen at ~30 FPS.
-	•	Keyboard & Mouse Events: Logged via pynput for standard OS-level input (positions, clicks, keys).
-	•	Optional Raw Input (macOS, will add windows later):
-	•	When the script starts, it prompts Use raw mouse data via Quartz? (y/n) (only macos).
-	•	Trials & Logging:
-	•	Each trial is stored in a Trial_<N> folder.
-	•	A JSON file TrialData_<N>.json keeps the event+frame metadata (timestamps, keys, mouse deltas, etc.).
-	•	Visualization:
-	•	You can replay frames in a simple OpenCV window and view the associated events in the console.
+
+	-	Frame Capture: Uses mss to grab the primary screen at ~30 FPS.
+	-	Keyboard & Mouse Events: Logged via pynput for standard OS-level input (positions, clicks, keys).
+	-	Optional Raw Input (macOS, will add windows later):
+	-	When the script starts, it prompts Use raw mouse data via Quartz? (y/n) (only macos).
+	-	Trials & Logging:
+	-	Each trial is stored in a Trial_<N> folder.
+	-	A JSON file TrialData_<N>.json keeps the event+frame metadata (timestamps, keys, mouse deltas, etc.).
+	-	Visualization:
+	-	You can replay frames in a simple OpenCV window and view the associated events in the console.
+
+![Visualisation of the capture](SCR-20250225-lyvn.png)
 
 Requirements
-	•	Python 3.7+
-	•	mss
-	•	pynput
-	•	rich
-	•	opencv-python
+
+	-	Python 3.7+
+	-	mss
+	-	pynput
+	-	rich
+	-	opencv-python
 
 Usage
 
